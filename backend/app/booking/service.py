@@ -1,5 +1,5 @@
 # บันทึกการจองและตัดที่นั่ง (T-03)
-# รองรับ FR-BKG-04
+# รองรับ FR-BKG-04, FR-BKG-02
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,13 @@ class SlotFullError(Exception):
     """ช่วงเวลาที่เลือกไม่มีที่นั่งเหลือแล้ว"""
 
 
+class DuplicateBookingError(Exception):
+    """ผู้รับบริการมีคิวที่ยังไม่ได้ใช้ในวันเดียวกันแล้ว (FR-BKG-02)"""
+
+    def __init__(self, queue_no: str):
+        self.queue_no = queue_no
+
+
 def next_queue_no(db: Session, slot_date) -> str:
     """ออกหมายเลขคิวรูปแบบ A001 เริ่มนับใหม่ทุกวัน (FR-BKG-04)"""
     count = db.scalar(
@@ -18,13 +25,27 @@ def next_queue_no(db: Session, slot_date) -> str:
     return f"A{count + 1:03d}"
 
 
+def get_active_booking_same_day(db: Session, hn: str, slot_date) -> Booking | None:
+    """คืนการจองที่ยังไม่ได้ใช้ในวันเดียวกัน (FR-BKG-02)"""
+    return db.scalar(
+        select(Booking)
+        .where(Booking.hn == hn, Booking.booking_date == slot_date, Booking.status != "CANCELLED")
+        .order_by(Booking.created_at.desc())
+        .limit(1)
+    )
+
+
 def create_booking(db: Session, hn: str, slot_id: int) -> Booking:
-    """ยืนยันการจอง: ตรวจที่นั่ง ตัดที่นั่ง บันทึกการจอง ออกหมายเลขคิว (FR-BKG-04)"""
+    """ยืนยันการจอง: ตรวจคิวซ้ำ ตรวจที่นั่ง ตัดที่นั่ง บันทึกการจอง ออกหมายเลขคิว (FR-BKG-02, FR-BKG-04)"""
     slot = db.get(Slot, slot_id)
     if slot is None:
         raise ValueError("ไม่พบช่วงเวลา")
-    if slot.remaining < 0:
+    if slot.remaining <= 0:
         raise SlotFullError(slot_id)
+
+    active_booking = get_active_booking_same_day(db, hn, slot.slot_date)
+    if active_booking is not None:
+        raise DuplicateBookingError(active_booking.queue_no or "")
 
     slot.remaining -= 1
     booking = Booking(

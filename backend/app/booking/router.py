@@ -1,5 +1,5 @@
 # API จองคิว POST /bookings (T-03)
-# รองรับ FR-BKG-04, IF-IDP-01
+# รองรับ FR-BKG-02, FR-BKG-04, IF-IDP-01
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,10 +21,15 @@ class BookingRequest(BaseModel):
 
 @router.post("/bookings", status_code=201)
 def create_booking(req: BookingRequest, hn: str = Depends(get_verified_hn), db: Session = Depends(get_db)):
-    """ยืนยันการจอง แล้วคืนหมายเลขคิว (FR-BKG-04)"""
+    """ยืนยันการจอง แล้วคืนหมายเลขคิว (FR-BKG-02, FR-BKG-04)"""
     logger.info("booking request slot=%s hn=%s national_id=%s", req.slot_id, hn, req.national_id)
     try:
         booking = service.create_booking(db, hn=hn, slot_id=req.slot_id)
+    except service.DuplicateBookingError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "มีคิวที่ยังไม่ได้ใช้ในวันเดียวกัน", "queue_no": exc.queue_no},
+        ) from exc
     except service.SlotFullError:
         raise HTTPException(status_code=409, detail="ช่วงเวลาเต็ม")
     except ValueError as e:
